@@ -1,7 +1,7 @@
 from urllib.parse import urlparse
 import logging
 import requests
-import auth_utils
+from . import auth_utils
 
 
 class _BitmexNonceAuth(requests.auth.AuthBase):
