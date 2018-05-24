@@ -4,6 +4,9 @@ import requests
 from . import auth_utils
 
 
+LOGGER = logging.getLogger('angou_bitmex')
+
+
 class _BitmexNonceAuth(requests.auth.AuthBase):
     def __init__(self, api_key, api_secret):
         self.api_key = api_key
@@ -25,6 +28,10 @@ class _BitmexNonceAuth(requests.auth.AuthBase):
         })
 
         return r
+
+
+class InvalidJSON(Exception):
+    pass
 
 
 class RestError(Exception):
@@ -50,7 +57,10 @@ class RestTemporaryDownError(RestError):
 
 
 class RestSession:
-    def __init__(self, domain, api_key, api_secret):
+    def __init__(self, domain, api_key, api_secret, timeout=None):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.timeout = timeout
         self._base_url = f'https://{domain}/api/v1'
         self._session = requests.Session()
         self._session.headers.update({
@@ -58,37 +68,33 @@ class RestSession:
             'content-type': 'application/json',
             'accept': 'application/json',
         })
-        self._auth = _BitmexNonceAuth(api_key, api_secret)
-        self.logger = logging.getLogger('angou_bitmex')
+        self._session.auth = _BitmexNonceAuth(api_key, api_secret)
 
     def request(self, verb, path, query=None, postdict=None):
-        self.logger.debug('%s %s query=%s postdict=%s', verb, path, query, postdict)
-
-        url = self._base_url + path
-
-        req = requests.Request(verb, url, json=postdict, auth=self._auth, params=query)
-        prepared_req = self._session.prepare_request(req)
-        resp = self._session.send(prepared_req)
-
+        LOGGER.debug('%s %s query=%s postdict=%s', verb, path, query, postdict)
+        r = self._session.request(verb, self._base_url + path, json=postdict, params=query,
+                                  timeout=self.timeout)
         try:
-            resp.raise_for_status()
-        except requests.exceptions.HTTPError as ex:
-            if resp is None:
-                raise ex
-            elif resp.status_code == 400:
-                error = resp.json()['error']
-                message = error['message'] if error else ''
-                raise RestBadRequestError(resp.status_code, resp.text, message)
-            elif resp.status_code == 429:
-                retry_after = None
+            r.raise_for_status()
+        except requests.exceptions.HTTPError:
+            if r.status_code == 400:
                 try:
-                    retry_after = int(resp.headers['Retry-After'])
+                    err_obj = r.json()
+                    raise RestBadRequestError(r.status_code, r.text, err_obj['error']['message'])
                 except (ValueError, KeyError):
                     pass
-                raise RestRateLimitExceededError(resp.status_code, resp.text, retry_after)
-            elif resp.status_code == 503:
-                raise RestTemporaryDownError(resp.status_code, resp.text)
-            else:
-                raise RestError(resp.status_code, resp.text)
+            elif r.status_code == 429:
+                retry_after = None
+                try:
+                    retry_after = int(r.headers['Retry-After'])
+                except (ValueError, KeyError):
+                    pass
+                raise RestRateLimitExceededError(r.status_code, r.text, retry_after)
+            elif r.status_code == 503:
+                raise RestTemporaryDownError(r.status_code, r.text)
+            raise RestError(r.status_code, r.text)
         else:
-            return resp.json()
+            try:
+                return r.json()
+            except ValueError:
+                raise InvalidJSON()
