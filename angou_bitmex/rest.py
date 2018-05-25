@@ -4,7 +4,7 @@ import requests
 from . import auth_utils
 
 
-LOGGER = logging.getLogger('angou_bitmex')
+LOGGER = logging.getLogger(__name__)
 
 
 class _BitmexNonceAuth(requests.auth.AuthBase):
